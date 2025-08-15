@@ -30,35 +30,63 @@ let globalAccessToken: string | null = null;
 let globalTokenExpiresOn: Date | null = null;
 
 // Function to create SQL config with fresh access token, returns token and expiry
-export async function createSqlConfig(): Promise<{ config: sql.config, token: string, expiresOn: Date }> {
-  const credential = new InteractiveBrowserCredential({
-    redirectUri: 'http://localhost'
-    // disableAutomaticAuthentication : true
-  });
-  const accessToken = await credential.getToken('https://database.windows.net/.default');
-
+export async function createSqlConfig(): Promise<{ config: sql.config, token: string | null, expiresOn: Date | null }> {
+  const authType = process.env.AUTH_TYPE || 'azure-ad';
   const trustServerCertificate = process.env.TRUST_SERVER_CERTIFICATE?.toLowerCase() === 'true';
   const connectionTimeout = process.env.CONNECTION_TIMEOUT ? parseInt(process.env.CONNECTION_TIMEOUT, 10) : 30;
+  const serverPort = process.env.SERVER_PORT ? parseInt(process.env.SERVER_PORT, 10) : undefined;
 
-  return {
-    config: {
-      server: process.env.SERVER_NAME!,
-      database: process.env.DATABASE_NAME!,
-      options: {
-        encrypt: true,
-        trustServerCertificate
-      },
-      authentication: {
-        type: 'azure-active-directory-access-token',
+  if (authType === 'sql') {
+    // SQL Authentication (username/password)
+    if (!process.env.SQL_USERNAME || !process.env.SQL_PASSWORD) {
+      throw new Error('SQL_USERNAME and SQL_PASSWORD must be set when using AUTH_TYPE=sql');
+    }
+    
+    return {
+      config: {
+        server: process.env.SERVER_NAME!,
+        port: serverPort,
+        database: process.env.DATABASE_NAME!,
+        user: process.env.SQL_USERNAME,
+        password: process.env.SQL_PASSWORD,
         options: {
-          token: accessToken?.token!,
+          encrypt: true,
+          trustServerCertificate
         },
+        connectionTimeout: connectionTimeout * 1000, // convert seconds to milliseconds
       },
-      connectionTimeout: connectionTimeout * 1000, // convert seconds to milliseconds
-    },
-    token: accessToken?.token!,
-    expiresOn: accessToken?.expiresOnTimestamp ? new Date(accessToken.expiresOnTimestamp) : new Date(Date.now() + 30 * 60 * 1000)
-  };
+      token: null,
+      expiresOn: null
+    };
+  } else {
+    // Azure AD Authentication (existing behavior)
+    const credential = new InteractiveBrowserCredential({
+      redirectUri: 'http://localhost'
+      // disableAutomaticAuthentication : true
+    });
+    const accessToken = await credential.getToken('https://database.windows.net/.default');
+
+    return {
+      config: {
+        server: process.env.SERVER_NAME!,
+        port: serverPort,
+        database: process.env.DATABASE_NAME!,
+        options: {
+          encrypt: true,
+          trustServerCertificate
+        },
+        authentication: {
+          type: 'azure-active-directory-access-token',
+          options: {
+            token: accessToken?.token!,
+          },
+        },
+        connectionTimeout: connectionTimeout * 1000, // convert seconds to milliseconds
+      },
+      token: accessToken?.token!,
+      expiresOn: accessToken?.expiresOnTimestamp ? new Date(accessToken.expiresOnTimestamp) : new Date(Date.now() + 30 * 60 * 1000)
+    };
+  }
 }
 
 const updateDataTool = new UpdateDataTool();
@@ -164,18 +192,27 @@ runServer().catch((error) => {
 // Connect to SQL only when handling a request
 
 async function ensureSqlConnection() {
-  // If we have a pool and it's connected, and the token is still valid, reuse it
-  if (
-    globalSqlPool &&
-    globalSqlPool.connected &&
-    globalAccessToken &&
-    globalTokenExpiresOn &&
-    globalTokenExpiresOn > new Date(Date.now() + 2 * 60 * 1000) // 2 min buffer
-  ) {
-    return;
+  const authType = process.env.AUTH_TYPE || 'azure-ad';
+  
+  // For SQL auth, just check if we have a connected pool
+  if (authType === 'sql') {
+    if (globalSqlPool && globalSqlPool.connected) {
+      return;
+    }
+  } else {
+    // For Azure AD auth, check token expiry as well
+    if (
+      globalSqlPool &&
+      globalSqlPool.connected &&
+      globalAccessToken &&
+      globalTokenExpiresOn &&
+      globalTokenExpiresOn > new Date(Date.now() + 2 * 60 * 1000) // 2 min buffer
+    ) {
+      return;
+    }
   }
 
-  // Otherwise, get a new token and reconnect
+  // Otherwise, get a new config and reconnect
   const { config, token, expiresOn } = await createSqlConfig();
   globalAccessToken = token;
   globalTokenExpiresOn = expiresOn;
