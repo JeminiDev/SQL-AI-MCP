@@ -72,9 +72,14 @@ Both Node.js and .NET implementations follow the Model Context Protocol pattern:
 ## Key Technical Details
 
 ### Authentication
-- Node server uses Azure AD Interactive Browser authentication
-- .NET server supports both Windows Authentication and Azure AD
-- Connection strings can be configured via environment variables
+- Both servers support two authentication methods:
+  - **Azure AD Authentication** (default): Uses Azure AD tokens for secure cloud access
+  - **SQL Authentication**: Username/password for local databases
+- Configuration via environment variables:
+  - `AUTH_TYPE`: Choose between 'azure-ad' or 'sql'
+  - `SERVER_NAME`, `SERVER_PORT`: Database server location
+  - `SQL_USERNAME`, `SQL_PASSWORD`: Credentials for SQL auth
+- .NET server also supports direct connection strings via `CONNECTION_STRING`
 
 ### MCP Protocol Integration
 - Both servers implement standard MCP tools for database operations
